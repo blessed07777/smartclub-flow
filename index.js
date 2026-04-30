@@ -1,52 +1,65 @@
 const express = require('express');
 const crypto  = require('crypto');
-const app     = express();
+const { google } = require('googleapis');
+const app = express();
 app.use(express.json());
 
-// ─── Ключ (задать в Railway → Variables → PRIVATE_KEY) ────────────────────────
-const PRIVATE_KEY_RAW = process.env.PRIVATE_KEY || '';
+// ─── Конфиг ───────────────────────────────────────────────────────────────────
+const PRIVATE_KEY_RAW  = process.env.PRIVATE_KEY || '';
+const PRIVATE_KEY      = PRIVATE_KEY_RAW.replace(/\\n/g, '\n');
+const SPREADSHEET_ID   = process.env.SPREADSHEET_ID || '';
+const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || ''; // JSON сервисного аккаунта
 
-// Railway хранит переменные одной строкой — восстанавливаем переносы строк
-const PRIVATE_KEY = PRIVATE_KEY_RAW.replace(/\\n/g, '\n');
-
-// ─── Хранилище сессий (в памяти; для прода замените на Redis) ─────────────────
 const sessions = {};
 
-// ─── Расшифровка запроса от Meta ──────────────────────────────────────────────
+// ─── Google Sheets ────────────────────────────────────────────────────────────
+async function appendToSheet(row) {
+  if (!SPREADSHEET_ID || !GOOGLE_CREDS_RAW) {
+    console.log('[Sheets] Переменные не заданы, пропускаем');
+    return;
+  }
+  try {
+    const creds = JSON.parse(GOOGLE_CREDS_RAW);
+    const auth  = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+    const sheets = google.sheets({ version: 'v4', auth });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Лиды!A:F',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [row] }
+    });
+    console.log('📊 Данные записаны в Google Таблицу');
+  } catch (e) {
+    console.error('❌ Ошибка Google Sheets:', e.message);
+  }
+}
+
+// ─── Шифрование/дешифрование Meta Flow ───────────────────────────────────────
 function decryptRequest(body) {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
+  if (!PRIVATE_KEY) throw new Error('PRIVATE_KEY не задан');
 
-  if (!PRIVATE_KEY) throw new Error('PRIVATE_KEY не задан в переменных окружения');
-
-  // Расшифровываем AES-ключ приватным RSA-ключом
   const aesKey = crypto.privateDecrypt(
-    {
-      key:     PRIVATE_KEY,
-      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-      oaepHash: 'sha256'
-    },
+    { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
     Buffer.from(encrypted_aes_key, 'base64')
   );
-
   const iv            = Buffer.from(initial_vector, 'base64');
   const encryptedData = Buffer.from(encrypted_flow_data, 'base64');
   const TAG_LENGTH    = 16;
   const encryptedBody = encryptedData.slice(0, -TAG_LENGTH);
   const tag           = encryptedData.slice(-TAG_LENGTH);
-
-  const decipher = crypto.createDecipheriv('aes-128-gcm', aesKey, iv);
+  const decipher      = crypto.createDecipheriv('aes-128-gcm', aesKey, iv);
   decipher.setAuthTag(tag);
   const decrypted = Buffer.concat([decipher.update(encryptedBody), decipher.final()]);
-
   return { body: JSON.parse(decrypted.toString('utf8')), aesKey, iv };
 }
 
-// ─── Шифрование ответа для Meta ───────────────────────────────────────────────
 function encryptResponse(response, aesKey, iv) {
-  // IV инвертируется побитово для ответа
   const flippedIv = Buffer.alloc(iv.length);
   for (let i = 0; i < iv.length; i++) flippedIv[i] = ~iv[i];
-
   const cipher = crypto.createCipheriv('aes-128-gcm', aesKey, flippedIv);
   return Buffer.concat([
     cipher.update(JSON.stringify(response), 'utf8'),
@@ -55,12 +68,10 @@ function encryptResponse(response, aesKey, iv) {
   ]).toString('base64');
 }
 
-// ─── Основной обработчик Flow ─────────────────────────────────────────────────
-app.post('/flow', (req, res) => {
+// ─── Обработчик Flow ──────────────────────────────────────────────────────────
+app.post('/flow', async (req, res) => {
 
-  // Health check от Meta (незашифрованный ping)
   if (req.body?.action === 'ping') {
-    console.log('📡 Health check ping — ответ active');
     return res.json({ data: { status: 'active' } });
   }
 
@@ -69,17 +80,14 @@ app.post('/flow', (req, res) => {
     const { action, data, flow_token } = body;
     const { name, phone, grade, goal, program } = data || {};
 
-    console.log(`▶ action=${action} grade=${grade} goal=${goal} program=${program}`);
-
     let response;
 
     if (action === 'ping') {
-      // На случай зашифрованного ping
       response = { data: { status: 'active' } };
 
     } else if (action === 'data_exchange') {
 
-      // ШАГ 1: Заполнен квиз (есть name, phone, grade, goal) → роутим на программу
+      // ШАГ 1: Квиз заполнен → роутим на программу
       if (goal && name && phone && !program) {
         sessions[flow_token] = { name, phone, grade, goal };
 
@@ -89,29 +97,23 @@ app.post('/flow', (req, res) => {
           bil:   'RESULT_BIL',
           ent:   'RESULT_ENT'
         };
-        const screen = screenMap[goal] || 'RESULT_NIL';
+        response = { screen: screenMap[goal] || 'RESULT_NIL', data: { name, phone, grade, goal } };
 
-        console.log(`→ Маршрут: ${screen} для ${name}`);
-        response = { screen, data: { name, phone, grade, goal } };
-
-      // ШАГ 2: Нажали "Записаться" (есть program) → SUCCESS
+      // ШАГ 2: Нажали "Записаться" → пишем в таблицу + SUCCESS
       } else if (program) {
-        const client = sessions[flow_token] || {};
-        const msg = [
-          '✅ Новая заявка через WhatsApp Flow!',
-          `👤 Имя: ${client.name || name || '—'}`,
-          `📞 Телефон: ${client.phone || phone || '—'}`,
-          `🎓 Класс: ${client.grade || grade || '—'}`,
-          `📚 Программа: ${program.toUpperCase()}`
-        ].join('\n');
+        const client  = sessions[flow_token] || {};
+        const now     = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
+        const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
+        const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
 
-        console.log(msg);
-        notifyManager(msg);
+        // Строка для таблицы: Дата | Имя | Телефон | Класс | Программа | Статус
+        const row = [now, client.name || '—', client.phone || '—', gradeLabel, progLabel, 'Новая заявка'];
+        await appendToSheet(row);
 
+        console.log(`✅ Заявка: ${client.name} | ${client.phone} | ${gradeLabel} | ${progLabel}`);
         response = { screen: 'SUCCESS', data: { program } };
 
       } else {
-        // Fallback
         response = { screen: 'QUIZ', data: {} };
       }
 
@@ -119,42 +121,18 @@ app.post('/flow', (req, res) => {
       response = { screen: 'QUIZ', data: {} };
     }
 
-    const encrypted = encryptResponse(response, aesKey, iv);
-    res.send(encrypted);
+    res.send(encryptResponse(response, aesKey, iv));
 
   } catch (err) {
-    console.error('❌ Ошибка обработки Flow:', err.message);
+    console.error('❌ Ошибка Flow:', err.message);
     res.status(500).send('error');
   }
 });
-
-// ─── Уведомление менеджера (Telegram) ────────────────────────────────────────
-async function notifyManager(msg) {
-  const token  = process.env.TELEGRAM_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-
-  if (!token || !chatId) {
-    console.log('[notifyManager] Telegram не настроен, пропускаем');
-    return;
-  }
-
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ chat_id: chatId, text: msg })
-    });
-    const result = await response.json();
-    if (!result.ok) console.error('Telegram ошибка:', result.description);
-    else            console.log('📨 Telegram уведомление отправлено');
-  } catch (e) {
-    console.error('Telegram fetch error:', e.message);
-  }
-}
 
 // ─── Запуск ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ SmartClub Flow сервер запущен на порту ${PORT}`);
-  console.log(`🔑 PRIVATE_KEY: ${PRIVATE_KEY ? 'загружен (' + PRIVATE_KEY.length + ' символов)' : '❌ НЕ ЗАДАН!'}`);
+  console.log(`🔑 PRIVATE_KEY: ${PRIVATE_KEY ? 'загружен' : '❌ НЕ ЗАДАН'}`);
+  console.log(`📊 Google Sheets: ${SPREADSHEET_ID ? SPREADSHEET_ID : '❌ SPREADSHEET_ID не задан'}`);
 });
