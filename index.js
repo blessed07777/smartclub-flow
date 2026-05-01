@@ -71,12 +71,16 @@ function encryptResponse(response, aesKey, iv) {
 // ─── Обработчик Flow ──────────────────────────────────────────────────────────
 app.post('/flow', async (req, res) => {
 
+  console.log('📥 Запрос получен, keys:', Object.keys(req.body || {}));
+
   if (req.body?.action === 'ping') {
+    console.log('📡 Ping получен');
     return res.json({ data: { status: 'active' } });
   }
 
   try {
     const { body, aesKey, iv } = decryptRequest(req.body);
+    console.log('🔓 Расшифровано:', JSON.stringify(body).substring(0, 200));
     const { action, data, flow_token } = body;
     const { name, phone, grade, goal, program } = data || {};
 
