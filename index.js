@@ -72,7 +72,6 @@ const extractId = (v) => {
   if (!v) return '';
   if (typeof v === 'object') return v?.id ?? '';
   const s = String(v).trim();
-  // Если WhatsApp не раскрыл ${...} — игнорируем
   if (s.startsWith('${')) return '';
   return s;
 };
@@ -110,7 +109,7 @@ app.post('/flow', async (req, res) => {
 
     } else if (action === 'data_exchange') {
 
-      // ── Приоритет 1: нажали "Записаться" на странице результата ──────────────
+      // ── Приоритет 1: нажали "Записаться" ──────────────────────────────────────
       if (program) {
         const client = sessions[flow_token] || {};
         const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
@@ -124,7 +123,7 @@ app.post('/flow', async (req, res) => {
         seenTokens.delete(flow_token);
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
-      // ── Приоритет 2: пришли реальные данные из квиза ─────────────────────────
+      // ── Приоритет 2: данные из квиза ──────────────────────────────────────────
       } else if (hasRealData) {
         sessions[flow_token] = { name, phone, grade, goal };
         seenTokens.add(flow_token);
@@ -143,14 +142,13 @@ app.post('/flow', async (req, res) => {
           }
         };
 
-      // ── Приоритет 3: пустые данные (init или кнопка без данных) ──────────────
+      // ── Приоритет 3: пустые данные (init / fallback) ──────────────────────────
       } else {
         if (!seenTokens.has(flow_token)) {
           seenTokens.add(flow_token);
           console.log('🟡 Init → QUIZ');
           response = { version: '3.0', screen: 'QUIZ', data: {} };
         } else {
-          // Второй пустой запрос = кнопка нажата но данные не пришли → RESULT_NIL
           console.log('🔘 Данные пустые (fallback) → RESULT_NIL');
           sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
           response = {
