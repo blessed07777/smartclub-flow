@@ -152,11 +152,11 @@ app.post('/flow', async (req, res) => {
         const count = (tokenInitCount[flow_token] || 0) + 1;
         tokenInitCount[flow_token] = count;
 
-        if (count <= 2) {
+        if (count <= 3) {
           console.log(`🟡 Пустой запрос #${count} → QUIZ`);
           response = { version: '3.0', screen: 'QUIZ', data: {} };
         } else {
-          // 3-й+ пустой запрос — кнопка нажата без данных → RESULT_NIL (fallback)
+          // 4-й+ пустой запрос — кнопка нажата без данных → RESULT_NIL (fallback)
           console.log(`🔘 Пустой запрос #${count} → RESULT_NIL (fallback)`);
           delete tokenInitCount[flow_token];
           sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
