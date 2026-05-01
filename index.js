@@ -101,7 +101,7 @@ app.post('/flow', async (req, res) => {
           bil:   'RESULT_BIL',
           ent:   'RESULT_ENT'
         };
-        response = { screen: screenMap[goal] || 'RESULT_NIL', data: { name, phone, grade, goal } };
+        response = { version: '3.0', screen: screenMap[goal] || 'RESULT_NIL', data: { name, phone, grade, goal } };
 
       // ШАГ 2: Нажали "Записаться" → пишем в таблицу + SUCCESS
       } else if (program) {
@@ -115,14 +115,14 @@ app.post('/flow', async (req, res) => {
         await appendToSheet(row);
 
         console.log(`✅ Заявка: ${client.name} | ${client.phone} | ${gradeLabel} | ${progLabel}`);
-        response = { screen: 'SUCCESS', data: { program } };
+        response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
       } else {
-        response = { screen: 'QUIZ', data: {} };
+        response = { version: '3.0', screen: 'QUIZ', data: {} };
       }
 
     } else {
-      response = { screen: 'QUIZ', data: {} };
+      response = { version: '3.0', screen: 'QUIZ', data: {} };
     }
 
     res.send(encryptResponse(response, aesKey, iv));
