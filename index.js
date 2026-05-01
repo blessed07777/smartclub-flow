@@ -118,11 +118,12 @@ app.post('/flow', async (req, res) => {
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
       } else {
-        response = { version: '3.0', screen: 'QUIZ', data: {} };
+        // Инициализация — не указываем screen, просто возвращаем пустые данные
+        response = { version: '3.0', data: {} };
       }
 
     } else {
-      response = { version: '3.0', screen: 'QUIZ', data: {} };
+      response = { version: '3.0', data: {} };
     }
 
     res.send(encryptResponse(response, aesKey, iv));
