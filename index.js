@@ -10,13 +10,20 @@ const SPREADSHEET_ID   = process.env.SPREADSHEET_ID || '';
 const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || '';
 
 const sessions       = {};
-const tokenFirstSeen = {};
+const tokenFirstSeen = {}; // flow_token → timestamp первого пустого запроса
 
+// ─── Google Sheets ────────────────────────────────────────────────────────────
 async function appendToSheet(row) {
-  if (!SPREADSHEET_ID || !GOOGLE_CREDS_RAW) return;
+  if (!SPREADSHEET_ID || !GOOGLE_CREDS_RAW) {
+    console.log('[Sheets] Переменные не заданы, пропускаем');
+    return;
+  }
   try {
     const creds = JSON.parse(GOOGLE_CREDS_RAW);
-    const auth  = new google.auth.GoogleAuth({ credentials: creds, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
+    const auth  = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
@@ -30,6 +37,7 @@ async function appendToSheet(row) {
   }
 }
 
+// ─── Шифрование ───────────────────────────────────────────────────────────────
 function decryptRequest(body) {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
   if (!PRIVATE_KEY) throw new Error('PRIVATE_KEY не задан');
@@ -59,6 +67,7 @@ function encryptResponse(response, aesKey, iv) {
   ]).toString('base64');
 }
 
+// ─── Хелпер ───────────────────────────────────────────────────────────────────
 const extractId = (v) => {
   if (!v) return '';
   if (typeof v === 'object') return v?.id ?? '';
@@ -67,9 +76,13 @@ const extractId = (v) => {
   return s;
 };
 
+// ─── Обработчик ───────────────────────────────────────────────────────────────
 app.post('/flow', async (req, res) => {
   console.log('📥 keys:', Object.keys(req.body || {}));
-  if (req.body?.action === 'ping') return res.json({ data: { status: 'active' } });
+
+  if (req.body?.action === 'ping') {
+    return res.json({ data: { status: 'active' } });
+  }
 
   try {
     const { body, aesKey, iv } = decryptRequest(req.body);
@@ -83,6 +96,7 @@ app.post('/flow', async (req, res) => {
     const grade   = extractId(raw.client_grade  ?? raw.grade);
     const goal    = extractId(raw.client_goal   ?? raw.goal);
     const program = extractId(raw.program);
+
     const hasRealData = !!(name || phone || grade || goal);
 
     console.log(`📌 action=${action} screen=${currentScreen}`);
@@ -95,45 +109,74 @@ app.post('/flow', async (req, res) => {
 
     } else if (action === 'data_exchange') {
 
+      // ── Приоритет 1: нажали "Записаться" ──────────────────────────────────────
       if (program) {
         const client = sessions[flow_token] || {};
         const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
         const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
         const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
+
+        // Имя/телефон приходят с экрана RESULT (форма на текущем экране)
+        // grade берём из сессии (сохранено при сабмите QUIZ, если данные пришли)
         const finalName  = name  || client.name  || '—';
         const finalPhone = phone || client.phone || '—';
+
         const row = [now, finalName, finalPhone, gradeLabel, progLabel, 'Новая заявка'];
         await appendToSheet(row);
+
         console.log(`✅ ЗАЯВКА: ${finalName} | ${finalPhone} | ${gradeLabel} | ${progLabel}`);
         delete tokenFirstSeen[flow_token];
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
+      // ── Приоритет 2: пришли данные квиза ──────────────────────────────────────
       } else if (hasRealData) {
         sessions[flow_token] = { name, phone, grade, goal };
         delete tokenFirstSeen[flow_token];
-        console.log(`🟢 Данные квиза: grade="${grade}" goal="${goal}"`);
+        console.log(`🟢 Данные квиза: name="${name}" phone="${phone}" grade="${grade}" goal="${goal}"`);
+
         const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT' };
+        const targetScreen = screenMap[goal] || 'RESULT_NIL';
         response = {
           version: '3.0',
-          screen: screenMap[goal] || 'RESULT_NIL',
-          data: { client_grade: grade || '', client_goal: goal || 'nil' }
+          screen: targetScreen,
+          data: {
+            client_name:  name  || '—',
+            client_phone: phone || '—',
+            client_grade: grade || '',
+            client_goal:  goal  || 'nil'
+          }
         };
 
+      // ── Приоритет 3: пустые данные ────────────────────────────────────────────
       } else {
         const now     = Date.now();
-        const elapsed = tokenFirstSeen[flow_token] ? now - tokenFirstSeen[flow_token] : 0;
+        const elapsed = tokenFirstSeen[flow_token]
+          ? now - tokenFirstSeen[flow_token]
+          : 0;
+
         if (!tokenFirstSeen[flow_token]) {
+          // Первый пустой запрос (init)
           tokenFirstSeen[flow_token] = now;
-          console.log('🟡 Init → QUIZ');
+          console.log('🟡 Init → показываем QUIZ (без навигации)');
+          // НЕ возвращаем screen — иначе WhatsApp шлёт ещё один запрос и петля!
+          // WhatsApp сам покажет первый экран из flow.json
           response = { version: '3.0', data: {} };
+
         } else if (elapsed < 5000) {
-          console.log(`🔄 Re-init (${elapsed}ms)`);
-          response = { version: '3.0', data: {} };
+          // Повторный запрос в течение 5 сек → автоматический re-init от WhatsApp
+          console.log(`🔄 Re-init (${elapsed}ms) → break loop`);
+          response = { version: '3.0', data: {} }; // без screen = петля не возникает
+
         } else {
+          // Пустые данные спустя >5 сек → пользователь нажал кнопку без заполнения
           console.log(`🔘 Пустая кнопка (${elapsed}ms) → RESULT_NIL`);
           delete tokenFirstSeen[flow_token];
           sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
-          response = { version: '3.0', screen: 'RESULT_NIL', data: { client_grade: '', client_goal: 'nil' } };
+          response = {
+            version: '3.0',
+            screen: 'RESULT_NIL',
+            data: { client_name: '—', client_phone: '—', client_grade: '', client_goal: 'nil' }
+          };
         }
       }
 
@@ -142,12 +185,20 @@ app.post('/flow', async (req, res) => {
     }
 
     res.send(encryptResponse(response, aesKey, iv));
+
   } catch (err) {
     console.error('❌ Ошибка:', err.message);
     res.status(500).send('error');
   }
 });
 
+// ─── Сессия по токену (для автобота) ─────────────────────────────────────────
+app.get('/session/:token', (req, res) => {
+  const session = sessions[req.params.token] || {};
+  res.json(session);
+});
+
+// ─── Запуск ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ SmartClub Flow сервер запущен на порту ${PORT}`);
