@@ -8,7 +8,7 @@ app.use(express.json());
 const PRIVATE_KEY_RAW  = process.env.PRIVATE_KEY || '';
 const PRIVATE_KEY      = PRIVATE_KEY_RAW.replace(/\\n/g, '\n');
 const SPREADSHEET_ID   = process.env.SPREADSHEET_ID || '';
-const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || ''; // JSON сервисного аккаунта
+const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || '';
 
 const sessions = {};
 
@@ -80,9 +80,19 @@ app.post('/flow', async (req, res) => {
 
   try {
     const { body, aesKey, iv } = decryptRequest(req.body);
-    console.log('🔓 Расшифровано:', JSON.stringify(body).substring(0, 200));
-    const { action, data, flow_token } = body;
-    const { name, phone, grade, goal, program } = data || {};
+    console.log('🔓 ПОЛНЫЙ ЗАПРОС:', JSON.stringify(body));
+
+    const { action, screen: currentScreen, data, flow_token } = body;
+
+    // RadioButtonsGroup может слать {id, title} — берём только id
+    const raw = data || {};
+    const name    = raw.name    || '';
+    const phone   = raw.phone   || '';
+    const grade   = typeof raw.grade   === 'object' ? raw.grade?.id   : raw.grade;
+    const goal    = typeof raw.goal    === 'object' ? raw.goal?.id    : raw.goal;
+    const program = typeof raw.program === 'object' ? raw.program?.id : raw.program;
+
+    console.log(`📌 action=${action} screen=${currentScreen} name=${name} phone=${phone} grade=${grade} goal=${goal} program=${program}`);
 
     let response;
 
@@ -91,9 +101,15 @@ app.post('/flow', async (req, res) => {
 
     } else if (action === 'data_exchange') {
 
+      // ШАГ 0: Инициализация (открытие флоу) — возвращаем QUIZ
+      if (!name && !goal && !program) {
+        console.log('🟡 Инициализация → возвращаем QUIZ');
+        response = { version: '3.0', screen: 'QUIZ', data: {} };
+
       // ШАГ 1: Квиз заполнен → роутим на программу
-      if (goal && name && phone && !program) {
+      } else if (goal && name && phone && !program) {
         sessions[flow_token] = { name, phone, grade, goal };
+        console.log(`🟢 Квиз → программа: ${goal}`);
 
         const screenMap = {
           nil:   'RESULT_NIL',
@@ -110,7 +126,6 @@ app.post('/flow', async (req, res) => {
         const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
         const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
 
-        // Строка для таблицы: Дата | Имя | Телефон | Класс | Программа | Статус
         const row = [now, client.name || '—', client.phone || '—', gradeLabel, progLabel, 'Новая заявка'];
         await appendToSheet(row);
 
@@ -118,12 +133,12 @@ app.post('/flow', async (req, res) => {
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
       } else {
-        // Инициализация — не указываем screen, просто возвращаем пустые данные
-        response = { version: '3.0', data: {} };
+        console.log('⚠️ Неизвестное состояние, возвращаем QUIZ. data=', JSON.stringify(raw));
+        response = { version: '3.0', screen: currentScreen || 'QUIZ', data: {} };
       }
 
     } else {
-      response = { version: '3.0', data: {} };
+      response = { version: '3.0', screen: 'QUIZ', data: {} };
     }
 
     res.send(encryptResponse(response, aesKey, iv));
