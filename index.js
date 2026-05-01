@@ -100,11 +100,11 @@ app.post('/flow', async (req, res) => {
       response = { data: { status: 'active' } };
 
     } else if (action === 'data_exchange') {
-
-      // ШАГ 0: Инициализация (открытие флоу) — НЕ возвращаем screen, иначе петля
+      
+      // ШАГ 0: Инициализация (открытие флоу) — screen ОБЯЗАТЕЛЕН по спеке Meta
       if (!name && !goal && !program) {
-        console.log('🟡 Инициализация → ack без screen');
-        response = { version: '3.0', data: {} };
+        console.log('🟡 Инициализация → возвращаем QUIZ');
+        response = { version: '3.0', screen: 'QUIZ', data: {} };
 
       // ШАГ 1: Квиз заполнен → роутим на программу
       } else if (goal && name && phone && !program) {
