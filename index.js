@@ -19,10 +19,8 @@ async function appendToSheet(row) {
     const auth  = new google.auth.GoogleAuth({ credentials: creds, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
     const sheets = google.sheets({ version: 'v4', auth });
     await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Лиды!A:F',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] }
+      spreadsheetId: SPREADSHEET_ID, range: 'Лиды!A:F',
+      valueInputOption: 'USER_ENTERED', requestBody: { values: [row] }
     });
     console.log('📊 Записано в Google Таблицу');
   } catch (e) { console.error('❌ Sheets:', e.message); }
@@ -84,13 +82,20 @@ app.post('/flow', async (req, res) => {
 
       if (keys.length === 0) {
         if (!seenTokens.has(flow_token)) {
+          // Первый раз — init. Возвращаем QUIZ с screen (иначе ошибка при клике)
           seenTokens.add(flow_token);
-          console.log('🟡 Первый init → ack без screen');
-          response = { version: '3.0', data: {} };
+          console.log('🟡 Первый init → QUIZ');
+          response = { version: '3.0', screen: 'QUIZ', data: {} };
         } else {
-          console.log('🔘 Пустой сабмит → RESULT_NIL по умолчанию');
+          // Второй пустой запрос = кнопка нажата но ${} не сработал
+          // Возвращаем RESULT_NIL, НЕ QUIZ — иначе петля
+          console.log('🔘 Кнопка нажата, данные пустые → RESULT_NIL (без петли)');
           sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
-          response = { version: '3.0', screen: 'RESULT_NIL', data: { client_name: '—', client_phone: '—', client_grade: '', client_goal: 'nil' } };
+          response = {
+            version: '3.0',
+            screen: 'RESULT_NIL',
+            data: { client_name: '—', client_phone: '—', client_grade: '', client_goal: 'nil' }
+          };
         }
 
       } else if ((name || phone || goal || grade) && !program) {
