@@ -116,10 +116,15 @@ app.post('/flow', async (req, res) => {
         const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
         const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
 
-        const row = [now, client.name || '—', client.phone || '—', gradeLabel, progLabel, 'Новая заявка'];
+        // Имя/телефон приходят с экрана RESULT (форма на текущем экране)
+        // grade берём из сессии (сохранено при сабмите QUIZ, если данные пришли)
+        const finalName  = name  || client.name  || '—';
+        const finalPhone = phone || client.phone || '—';
+
+        const row = [now, finalName, finalPhone, gradeLabel, progLabel, 'Новая заявка'];
         await appendToSheet(row);
 
-        console.log(`✅ ЗАЯВКА: ${client.name} | ${client.phone} | ${gradeLabel} | ${progLabel}`);
+        console.log(`✅ ЗАЯВКА: ${finalName} | ${finalPhone} | ${gradeLabel} | ${progLabel}`);
         delete tokenFirstSeen[flow_token];
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
