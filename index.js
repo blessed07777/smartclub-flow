@@ -9,8 +9,8 @@ const PRIVATE_KEY      = PRIVATE_KEY_RAW.replace(/\\n/g, '\n');
 const SPREADSHEET_ID   = process.env.SPREADSHEET_ID || '';
 const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || '';
 
-const sessions        = {};
-const tokenInitCount  = {}; // flow_token → кол-во пустых запросов (init + re-init)
+const sessions       = {};
+const tokenFirstSeen = {}; // flow_token → timestamp первого пустого запроса
 
 // ─── Google Sheets ────────────────────────────────────────────────────────────
 async function appendToSheet(row) {
@@ -72,7 +72,7 @@ const extractId = (v) => {
   if (!v) return '';
   if (typeof v === 'object') return v?.id ?? '';
   const s = String(v).trim();
-  if (s.startsWith('${')) return ''; // нераскрытая переменная — игнорируем
+  if (s.startsWith('${')) return '';
   return s;
 };
 
@@ -116,20 +116,17 @@ app.post('/flow', async (req, res) => {
         const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
         const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
 
-        const finalName  = client.name  || '—';
-        const finalPhone = client.phone || '—';
-
-        const row = [now, finalName, finalPhone, gradeLabel, progLabel, 'Новая заявка'];
+        const row = [now, client.name || '—', client.phone || '—', gradeLabel, progLabel, 'Новая заявка'];
         await appendToSheet(row);
 
-        console.log(`✅ ЗАЯВКА: ${finalName} | ${finalPhone} | ${gradeLabel} | ${progLabel}`);
-        delete tokenInitCount[flow_token];
+        console.log(`✅ ЗАЯВКА: ${client.name} | ${client.phone} | ${gradeLabel} | ${progLabel}`);
+        delete tokenFirstSeen[flow_token];
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
       // ── Приоритет 2: пришли данные квиза ──────────────────────────────────────
       } else if (hasRealData) {
         sessions[flow_token] = { name, phone, grade, goal };
-        delete tokenInitCount[flow_token]; // сбрасываем счётчик
+        delete tokenFirstSeen[flow_token];
         console.log(`🟢 Данные квиза: name="${name}" phone="${phone}" grade="${grade}" goal="${goal}"`);
 
         const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT' };
@@ -147,18 +144,28 @@ app.post('/flow', async (req, res) => {
 
       // ── Приоритет 3: пустые данные ────────────────────────────────────────────
       } else {
-        // WhatsApp присылает 2 пустых запроса: init + автоматический re-init.
-        // Возвращаем QUIZ для обоих, чтобы пользователь успел заполнить форму.
-        const count = (tokenInitCount[flow_token] || 0) + 1;
-        tokenInitCount[flow_token] = count;
+        const now     = Date.now();
+        const elapsed = tokenFirstSeen[flow_token]
+          ? now - tokenFirstSeen[flow_token]
+          : 0;
 
-        if (count <= 3) {
-          console.log(`🟡 Пустой запрос #${count} → QUIZ`);
-          response = { version: '3.0', screen: 'QUIZ', data: {} };
+        if (!tokenFirstSeen[flow_token]) {
+          // Первый пустой запрос (init)
+          tokenFirstSeen[flow_token] = now;
+          console.log('🟡 Init → показываем QUIZ (без навигации)');
+          // НЕ возвращаем screen — иначе WhatsApp шлёт ещё один запрос и петля!
+          // WhatsApp сам покажет первый экран из flow.json
+          response = { version: '3.0', data: {} };
+
+        } else if (elapsed < 5000) {
+          // Повторный запрос в течение 5 сек → автоматический re-init от WhatsApp
+          console.log(`🔄 Re-init (${elapsed}ms) → break loop`);
+          response = { version: '3.0', data: {} }; // без screen = петля не возникает
+
         } else {
-          // 4-й+ пустой запрос — кнопка нажата без данных → RESULT_NIL (fallback)
-          console.log(`🔘 Пустой запрос #${count} → RESULT_NIL (fallback)`);
-          delete tokenInitCount[flow_token];
+          // Пустые данные спустя >5 сек → пользователь нажал кнопку без заполнения
+          console.log(`🔘 Пустая кнопка (${elapsed}ms) → RESULT_NIL`);
+          delete tokenFirstSeen[flow_token];
           sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
           response = {
             version: '3.0',
