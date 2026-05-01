@@ -101,10 +101,10 @@ app.post('/flow', async (req, res) => {
 
     } else if (action === 'data_exchange') {
 
-      // ШАГ 0: Инициализация (открытие флоу) — возвращаем QUIZ
+      // ШАГ 0: Инициализация (открытие флоу) — НЕ возвращаем screen, иначе петля
       if (!name && !goal && !program) {
-        console.log('🟡 Инициализация → возвращаем QUIZ');
-        response = { version: '3.0', screen: 'QUIZ', data: {} };
+        console.log('🟡 Инициализация → ack без screen');
+        response = { version: '3.0', data: {} };
 
       // ШАГ 1: Квиз заполнен → роутим на программу
       } else if (goal && name && phone && !program) {
