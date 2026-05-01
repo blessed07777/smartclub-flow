@@ -4,7 +4,6 @@ const { google } = require('googleapis');
 const app = express();
 app.use(express.json());
 
-// ─── Конфиг ───────────────────────────────────────────────────────────────────
 const PRIVATE_KEY_RAW  = process.env.PRIVATE_KEY || '';
 const PRIVATE_KEY      = PRIVATE_KEY_RAW.replace(/\\n/g, '\n');
 const SPREADSHEET_ID   = process.env.SPREADSHEET_ID || '';
@@ -12,7 +11,6 @@ const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || '';
 
 const sessions = {};
 
-// ─── Google Sheets ────────────────────────────────────────────────────────────
 async function appendToSheet(row) {
   if (!SPREADSHEET_ID || !GOOGLE_CREDS_RAW) {
     console.log('[Sheets] Переменные не заданы, пропускаем');
@@ -37,11 +35,9 @@ async function appendToSheet(row) {
   }
 }
 
-// ─── Шифрование/дешифрование Meta Flow ───────────────────────────────────────
 function decryptRequest(body) {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
   if (!PRIVATE_KEY) throw new Error('PRIVATE_KEY не задан');
-
   const aesKey = crypto.privateDecrypt(
     { key: PRIVATE_KEY, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' },
     Buffer.from(encrypted_aes_key, 'base64')
@@ -68,9 +64,7 @@ function encryptResponse(response, aesKey, iv) {
   ]).toString('base64');
 }
 
-// ─── Обработчик Flow ──────────────────────────────────────────────────────────
 app.post('/flow', async (req, res) => {
-
   console.log('📥 Запрос получен, keys:', Object.keys(req.body || {}));
 
   if (req.body?.action === 'ping') {
@@ -83,16 +77,17 @@ app.post('/flow', async (req, res) => {
     console.log('🔓 ПОЛНЫЙ ЗАПРОС:', JSON.stringify(body));
 
     const { action, screen: currentScreen, data, flow_token } = body;
-
-    // RadioButtonsGroup может слать {id, title} — берём только id
     const raw = data || {};
-    const name    = raw.name    || '';
-    const phone   = raw.phone   || '';
-    const grade   = typeof raw.grade   === 'object' ? raw.grade?.id   : raw.grade;
-    const goal    = typeof raw.goal    === 'object' ? raw.goal?.id    : raw.goal;
-    const program = typeof raw.program === 'object' ? raw.program?.id : raw.program;
+    const id = (v) => typeof v === 'object' ? v?.id : v;
 
-    console.log(`📌 action=${action} screen=${currentScreen} name=${name} phone=${phone} grade=${grade} goal=${goal} program=${program}`);
+    const name    = raw.client_name  || raw.name  || '';
+    const phone   = raw.client_phone || raw.phone || '';
+    const grade   = id(raw.client_grade ?? raw.grade);
+    const goal    = id(raw.client_goal  ?? raw.goal);
+    const program = id(raw.program);
+
+    console.log(`📌 action=${action} screen=${currentScreen} name="${name}" phone="${phone}" grade=${grade} goal=${goal} program=${program}`);
+    console.log(`📦 raw keys: ${Object.keys(raw).join(', ') || '(пусто)'}`);
 
     let response;
 
@@ -100,16 +95,14 @@ app.post('/flow', async (req, res) => {
       response = { data: { status: 'active' } };
 
     } else if (action === 'data_exchange') {
-      
-      // ШАГ 0: Инициализация (открытие флоу) — screen ОБЯЗАТЕЛЕН по спеке Meta
-      if (!name && !goal && !program) {
+
+      if (Object.keys(raw).length === 0) {
         console.log('🟡 Инициализация → возвращаем QUIZ');
         response = { version: '3.0', screen: 'QUIZ', data: {} };
 
-      // ШАГ 1: Квиз заполнен → роутим на программу
-      } else if (goal && name && phone && !program) {
+      } else if ((goal || name || phone) && !program) {
         sessions[flow_token] = { name, phone, grade, goal };
-        console.log(`🟢 Квиз → программа: ${goal}`);
+        console.log(`🟢 Квиз отправлен: name="${name}" phone="${phone}" grade=${grade} goal=${goal}`);
 
         const screenMap = {
           nil:   'RESULT_NIL',
@@ -117,9 +110,13 @@ app.post('/flow', async (req, res) => {
           bil:   'RESULT_BIL',
           ent:   'RESULT_ENT'
         };
-        response = { version: '3.0', screen: screenMap[goal] || 'RESULT_NIL', data: { name, phone, grade, goal } };
+        const targetScreen = screenMap[goal] || 'RESULT_NIL';
+        response = {
+          version: '3.0',
+          screen: targetScreen,
+          data: { client_name: name, client_phone: phone, client_grade: grade || '', client_goal: goal || '' }
+        };
 
-      // ШАГ 2: Нажали "Записаться" → пишем в таблицу + SUCCESS
       } else if (program) {
         const client  = sessions[flow_token] || {};
         const now     = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
@@ -133,7 +130,7 @@ app.post('/flow', async (req, res) => {
         response = { version: '3.0', screen: 'SUCCESS', data: { program } };
 
       } else {
-        console.log('⚠️ Неизвестное состояние, возвращаем QUIZ. data=', JSON.stringify(raw));
+        console.log('⚠️ Неизвестный кейс. raw=', JSON.stringify(raw));
         response = { version: '3.0', screen: currentScreen || 'QUIZ', data: {} };
       }
 
@@ -149,7 +146,6 @@ app.post('/flow', async (req, res) => {
   }
 });
 
-// ─── Запуск ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ SmartClub Flow сервер запущен на порту ${PORT}`);
