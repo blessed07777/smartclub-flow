@@ -91,10 +91,15 @@ app.post('/flow', async (req, res) => {
     const { action, screen: currentScreen, data, flow_token } = body;
     const raw = data || {};
 
+    // flow_token может быть закодирован как "phone|grade|goal"
+    const tokenParts = (flow_token || '').split('|');
+    const tokenGrade = tokenParts[1] || '';
+    const tokenGoal  = tokenParts[2] || '';
+
     const name    = extractId(raw.contact_name  ?? raw.client_name  ?? raw.name);
     const phone   = extractId(raw.contact_phone ?? raw.client_phone ?? raw.phone);
-    const grade   = extractId(raw.client_grade  ?? raw.grade);
-    const goal    = extractId(raw.client_goal   ?? raw.goal);
+    const grade   = extractId(raw.client_grade  ?? raw.grade) || tokenGrade;
+    const goal    = extractId(raw.client_goal   ?? raw.goal)  || tokenGoal;
     const program = extractId(raw.program);
 
     const hasRealData = !!(name || phone || grade || goal);
