@@ -119,7 +119,7 @@ app.post('/flow', async (req, res) => {
         const client = sessions[flow_token] || {};
         const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
         const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
-        const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ' }[program] || program.toUpperCase();
+        const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ+РФМШ+КТЛ' }[program] || program.toUpperCase();
 
         // Имя/телефон приходят с экрана RESULT (форма на текущем экране)
         // grade берём из сессии (сохранено при сабмите QUIZ, если данные пришли)
@@ -139,7 +139,7 @@ app.post('/flow', async (req, res) => {
         delete tokenFirstSeen[flow_token];
         console.log(`🟢 Данные квиза: name="${name}" phone="${phone}" grade="${grade}" goal="${goal}"`);
 
-        const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT' };
+        const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
         const targetScreen = screenMap[goal] || 'RESULT_NIL';
         response = {
           version: '3.0',
@@ -165,7 +165,7 @@ app.post('/flow', async (req, res) => {
 
           if (tokenGoal) {
             // grade+goal уже известны из flow_token → сразу открываем нужный экран
-            const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT' };
+            const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
             const targetScreen = screenMap[tokenGoal] || 'RESULT_NIL';
             sessions[flow_token] = { grade: tokenGrade, goal: tokenGoal };
             console.log(`🎯 Init → прямо на ${targetScreen} (grade=${tokenGrade}, goal=${tokenGoal})`);
