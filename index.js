@@ -11,6 +11,10 @@ const GOOGLE_CREDS_RAW = process.env.GOOGLE_CREDENTIALS || '';
 
 const sessions = {};
 
+const GOAL_LABELS  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ + РФМШ + КТЛ' };
+const GRADE_LABELS = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' };
+const SCREEN_MAP   = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
+
 // ─── Google Sheets ────────────────────────────────────────────────────────────
 async function appendToSheet(row) {
   if (!SPREADSHEET_ID || !GOOGLE_CREDS_RAW) {
@@ -66,19 +70,11 @@ function encryptResponse(response, aesKey, iv) {
   ]).toString('base64');
 }
 
-// ─── Хелпер ───────────────────────────────────────────────────────────────────
-const extractId = (v) => {
-  if (!v) return '';
-  if (typeof v === 'object') return v?.id ?? '';
-  const s = String(v).trim();
-  if (s.startsWith('${')) return '';
-  return s;
-};
-
 // ─── Обработчик ───────────────────────────────────────────────────────────────
 app.post('/flow', async (req, res) => {
   console.log('📥 keys:', Object.keys(req.body || {}));
 
+  // Незашифрованный ping
   if (req.body?.action === 'ping') {
     return res.json({ data: { status: 'active' } });
   }
@@ -87,100 +83,39 @@ app.post('/flow', async (req, res) => {
     const { body, aesKey, iv } = decryptRequest(req.body);
     console.log('🔓 BODY:', JSON.stringify(body));
 
-    const { action, screen: currentScreen, data, flow_token } = body;
+    const { action, data, flow_token } = body;
     const raw = data || {};
 
-    // flow_token может быть закодирован как "phone|grade|goal"
+    // flow_token = "phone|grade|goal"
     const tokenParts = (flow_token || '').split('|');
     const tokenGrade = tokenParts[1] || '';
     const tokenGoal  = tokenParts[2] || '';
 
-    const name    = extractId(raw.contact_name  ?? raw.client_name  ?? raw.name);
-    const phone   = extractId(raw.contact_phone ?? raw.client_phone ?? raw.phone);
-    const grade   = extractId(raw.client_grade  ?? raw.grade) || tokenGrade;
-    const goal    = extractId(raw.client_goal   ?? raw.goal)  || tokenGoal;
-    const program = extractId(raw.program);
+    const program = raw.program ? String(raw.program).trim() : '';
 
-    console.log(`📌 action=${action} screen=${currentScreen}`);
-    console.log(`👤 name="${name}" phone="${phone}" grade="${grade}" goal="${goal}" program="${program}"`);
+    console.log(`📌 action=${action} grade="${tokenGrade}" goal="${tokenGoal}" program="${program}"`);
 
     let response;
 
     if (action === 'ping') {
+      // ── ping ─────────────────────────────────────────────────────────────────
       response = { data: { status: 'active' } };
 
-    } else if (action === 'INIT') {
+    } else if (action === 'INIT' || action === 'data_exchange') {
+      // ── Открытие флоу: сразу показываем нужный экран ─────────────────────────
+      const goalId   = tokenGoal  || 'nil';
+      const gradeId  = tokenGrade || '';
+      const screen   = SCREEN_MAP[goalId] || 'RESULT_NIL';
+      const gradeLbl = GRADE_LABELS[gradeId] || gradeId || '—';
 
-      const goalLabels  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ + РФМШ + КТЛ' };
-      const gradeLabels = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' };
+      sessions[flow_token] = { grade: gradeId, goal: goalId };
+      console.log(`🚀 ${action} → ${screen} (grade=${gradeId}, goal=${goalId})`);
 
-      const introGoal  = tokenGoal  || 'nil';
-      const introGrade = tokenGrade || '';
-      sessions[flow_token] = { grade: tokenGrade, goal: introGoal };
-      console.log(`🚀 INIT → INTRO (goal=${introGoal}, grade=${introGrade})`);
       response = {
         version: '3.0',
-        screen: 'INTRO',
-        data: {
-          goal_label:  goalLabels[introGoal]   || 'Ваша программа',
-          grade_label: gradeLabels[introGrade] || introGrade || '—'
-        }
+        screen,
+        data: { grade_label: gradeLbl }
       };
-
-    } else if (action === 'data_exchange') {
-
-      const goalLabels  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ + РФМШ + КТЛ' };
-      const gradeLabels = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' };
-      const screenMap   = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
-
-      // ── INTRO → ALL_PROGRAMS ─────────────────────────────────────────────────
-      if (currentScreen === 'INTRO') {
-        const recGoal = tokenGoal || goal || (sessions[flow_token] || {}).goal || 'nil';
-        console.log(`📋 INTRO → ALL_PROGRAMS (recommended=${recGoal})`);
-        sessions[flow_token] = { grade: tokenGrade, goal: recGoal };
-        response = {
-          version: '3.0',
-          screen: 'ALL_PROGRAMS',
-          data: { recommended: goalLabels[recGoal] || recGoal.toUpperCase() }
-        };
-
-      // ── ALL_PROGRAMS → персональный RESULT ───────────────────────────────────
-      } else if (currentScreen === 'ALL_PROGRAMS') {
-        const goToGoal    = tokenGoal || (sessions[flow_token] || {}).goal || goal || 'nil';
-        const targetScreen = screenMap[goToGoal] || 'RESULT_NIL';
-        console.log(`▶️ ALL_PROGRAMS → ${targetScreen}`);
-        response = {
-          version: '3.0',
-          screen: targetScreen,
-          data: { client_grade: tokenGrade || (sessions[flow_token] || {}).grade || '', client_goal: goToGoal }
-        };
-
-      // ── Резервный путь: "Записаться" через data_exchange ─────────────────────
-      } else if (program) {
-        const client = sessions[flow_token] || {};
-        const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
-        const gradeLabel = gradeLabels[client.grade || tokenGrade] || '—';
-        const progLabel  = goalLabels[program] || program.toUpperCase();
-        const row = [now, '—', '—', gradeLabel, progLabel, 'Новая заявка'];
-        await appendToSheet(row);
-        console.log(`✅ ЗАЯВКА (flow): ${gradeLabel} | ${progLabel}`);
-        response = { version: '3.0', data: {} };
-
-      // ── Неизвестный экран — возвращаем INTRO ─────────────────────────────────
-      } else {
-        const introGoal  = tokenGoal  || 'nil';
-        const introGrade = tokenGrade || '';
-        console.log(`⚠️ Неизвестный экран "${currentScreen}" → INTRO`);
-        sessions[flow_token] = { grade: tokenGrade, goal: introGoal };
-        response = {
-          version: '3.0',
-          screen: 'INTRO',
-          data: {
-            goal_label:  goalLabels[introGoal]   || 'Ваша программа',
-            grade_label: gradeLabels[introGrade] || introGrade || '—'
-          }
-        };
-      }
 
     } else {
       response = { version: '3.0', data: {} };
