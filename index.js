@@ -162,10 +162,23 @@ app.post('/flow', async (req, res) => {
         if (!tokenFirstSeen[flow_token]) {
           // Первый пустой запрос (init)
           tokenFirstSeen[flow_token] = now;
-          console.log('🟡 Init → показываем QUIZ (без навигации)');
-          // НЕ возвращаем screen — иначе WhatsApp шлёт ещё один запрос и петля!
-          // WhatsApp сам покажет первый экран из flow.json
-          response = { version: '3.0', data: {} };
+
+          if (tokenGoal) {
+            // grade+goal уже известны из flow_token → сразу открываем нужный экран
+            const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT' };
+            const targetScreen = screenMap[tokenGoal] || 'RESULT_NIL';
+            sessions[flow_token] = { grade: tokenGrade, goal: tokenGoal };
+            console.log(`🎯 Init → прямо на ${targetScreen} (grade=${tokenGrade}, goal=${tokenGoal})`);
+            response = {
+              version: '3.0',
+              screen: targetScreen,
+              data: { client_grade: tokenGrade, client_goal: tokenGoal }
+            };
+          } else {
+            // Токен без данных — показываем QUIZ как запасной вариант
+            console.log('🟡 Init → показываем QUIZ (токен без grade/goal)');
+            response = { version: '3.0', data: {} };
+          }
 
         } else if (elapsed < 5000) {
           // Повторный запрос в течение 5 сек → автоматический re-init от WhatsApp
