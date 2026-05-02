@@ -114,86 +114,75 @@ app.post('/flow', async (req, res) => {
 
     } else if (action === 'data_exchange') {
 
-      // ── Приоритет 1: нажали "Записаться" ──────────────────────────────────────
-      if (program) {
-        const client = sessions[flow_token] || {};
-        const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
-        const gradeLabel = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' }[client.grade] || client.grade || '—';
-        const progLabel  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ+РФМШ+КТЛ' }[program] || program.toUpperCase();
+      const goalLabels  = { nil: 'НИШ', rfmsh: 'РФМШ', bil: 'БИЛ', ent: 'ЕНТ', combo: 'НИШ + РФМШ + КТЛ' };
+      const gradeLabels = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' };
+      const screenMap   = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
 
-        // Имя/телефон приходят с экрана RESULT (форма на текущем экране)
-        // grade берём из сессии (сохранено при сабмите QUIZ, если данные пришли)
-        const finalName  = name  || client.name  || '—';
-        const finalPhone = phone || client.phone || '—';
+      // ── INTRO → ALL_PROGRAMS ─────────────────────────────────────────────────
+      if (currentScreen === 'INTRO') {
+        const recGoal = tokenGoal || goal || 'nil';
+        console.log(`📋 INTRO → ALL_PROGRAMS (recommended=${recGoal})`);
+        sessions[flow_token] = { grade: tokenGrade, goal: recGoal };
+        response = {
+          version: '3.0',
+          screen: 'ALL_PROGRAMS',
+          data: { recommended: goalLabels[recGoal] || recGoal.toUpperCase() }
+        };
 
-        const row = [now, finalName, finalPhone, gradeLabel, progLabel, 'Новая заявка'];
-        await appendToSheet(row);
-
-        console.log(`✅ ЗАЯВКА: ${finalName} | ${finalPhone} | ${gradeLabel} | ${progLabel}`);
-        delete tokenFirstSeen[flow_token];
-        response = { version: '3.0', screen: 'SUCCESS', data: { program } };
-
-      // ── Приоритет 2: пришли данные квиза ──────────────────────────────────────
-      } else if (hasRealData) {
-        sessions[flow_token] = { name, phone, grade, goal };
-        delete tokenFirstSeen[flow_token];
-        console.log(`🟢 Данные квиза: name="${name}" phone="${phone}" grade="${grade}" goal="${goal}"`);
-
-        const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
-        const targetScreen = screenMap[goal] || 'RESULT_NIL';
+      // ── ALL_PROGRAMS → персональный RESULT ───────────────────────────────────
+      } else if (currentScreen === 'ALL_PROGRAMS') {
+        const goToGoal   = tokenGoal || (sessions[flow_token] || {}).goal || goal || 'nil';
+        const targetScreen = screenMap[goToGoal] || 'RESULT_NIL';
+        console.log(`▶️ ALL_PROGRAMS → ${targetScreen}`);
         response = {
           version: '3.0',
           screen: targetScreen,
-          data: {
-            client_name:  name  || '—',
-            client_phone: phone || '—',
-            client_grade: grade || '',
-            client_goal:  goal  || 'nil'
-          }
+          data: { client_grade: tokenGrade, client_goal: goToGoal }
         };
 
-      // ── Приоритет 3: пустые данные ────────────────────────────────────────────
+      // ── Резервный путь: "Записаться" через data_exchange ─────────────────────
+      } else if (program) {
+        const client = sessions[flow_token] || {};
+        const now    = new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' });
+        const gradeLabel = gradeLabels[client.grade || tokenGrade] || '—';
+        const progLabel  = goalLabels[program] || program.toUpperCase();
+        const row = [now, '—', '—', gradeLabel, progLabel, 'Новая заявка'];
+        await appendToSheet(row);
+        console.log(`✅ ЗАЯВКА (flow): ${gradeLabel} | ${progLabel}`);
+        delete tokenFirstSeen[flow_token];
+        response = { version: '3.0', data: {} };
+
+      // ── Init / пустой запрос ──────────────────────────────────────────────────
       } else {
         const now     = Date.now();
-        const elapsed = tokenFirstSeen[flow_token]
-          ? now - tokenFirstSeen[flow_token]
-          : 0;
+        const elapsed = tokenFirstSeen[flow_token] ? now - tokenFirstSeen[flow_token] : 0;
 
         if (!tokenFirstSeen[flow_token]) {
-          // Первый пустой запрос (init)
           tokenFirstSeen[flow_token] = now;
-
-          if (tokenGoal) {
-            // grade+goal уже известны из flow_token → сразу открываем нужный экран
-            const screenMap = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
-            const targetScreen = screenMap[tokenGoal] || 'RESULT_NIL';
-            sessions[flow_token] = { grade: tokenGrade, goal: tokenGoal };
-            console.log(`🎯 Init → прямо на ${targetScreen} (grade=${tokenGrade}, goal=${tokenGoal})`);
-            response = {
-              version: '3.0',
-              screen: targetScreen,
-              data: { client_grade: tokenGrade, client_goal: tokenGoal }
-            };
-          } else {
-            // Токен без данных — показываем QUIZ как запасной вариант
-            console.log('🟡 Init → показываем QUIZ (токен без grade/goal)');
-            response = { version: '3.0', data: {} };
-          }
-
-        } else if (elapsed < 5000) {
-          // Повторный запрос в течение 5 сек → автоматический re-init от WhatsApp
-          console.log(`🔄 Re-init (${elapsed}ms) → break loop`);
-          response = { version: '3.0', data: {} }; // без screen = петля не возникает
-
-        } else {
-          // Пустые данные спустя >5 сек → пользователь нажал кнопку без заполнения
-          console.log(`🔘 Пустая кнопка (${elapsed}ms) → RESULT_NIL`);
-          delete tokenFirstSeen[flow_token];
-          sessions[flow_token] = { name: '—', phone: '—', grade: '—', goal: 'nil' };
+          sessions[flow_token] = { grade: tokenGrade, goal: tokenGoal };
+          const introGoal  = tokenGoal  || 'nil';
+          const introGrade = tokenGrade || '—';
+          console.log(`🎯 Init → INTRO (goal=${introGoal}, grade=${introGrade})`);
           response = {
             version: '3.0',
-            screen: 'RESULT_NIL',
-            data: { client_name: '—', client_phone: '—', client_grade: '', client_goal: 'nil' }
+            screen: 'INTRO',
+            data: {
+              goal_label:  goalLabels[introGoal]    || 'Ваша программа',
+              grade_label: gradeLabels[introGrade]  || introGrade
+            }
+          };
+
+        } else if (elapsed < 5000) {
+          console.log(`🔄 Re-init (${elapsed}ms) → break loop`);
+          response = { version: '3.0', data: {} };
+
+        } else {
+          console.log(`🔘 Повторный пустой запрос (${elapsed}ms) → INTRO`);
+          delete tokenFirstSeen[flow_token];
+          response = {
+            version: '3.0',
+            screen: 'INTRO',
+            data: { goal_label: 'Ваша программа', grade_label: '—' }
           };
         }
       }
