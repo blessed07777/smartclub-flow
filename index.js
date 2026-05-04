@@ -71,17 +71,30 @@ app.post('/flow', async (req, res) => {
     // flow_token = "phone|grade|goal"
     const parts      = (flow_token || '').split('|');
     const gradeId    = parts[1] || '';
-    const goalId     = parts[2] || 'nil';
-    const gradeLabel = GRADE_LABELS[gradeId] || gradeId || '—';
-    const screen     = SCREEN_MAP[goalId] || 'RESULT_NIL';
+    const goalId     = parts[2] || '';
+    const gradeLabel = GRADE_LABELS[gradeId] || '—';
+    const screen     = SCREEN_MAP[goalId];
 
-    console.log(`📌 action=${action} → ${screen} (grade=${gradeId}, goal=${goalId})`);
+    console.log(`📌 action=${action} | token="${flow_token}" → grade=${gradeId}, goal=${goalId}`);
 
-    const response = {
-      version: '3.0',
-      screen,
-      data: { grade_label: gradeLabel }
-    };
+    let response;
+
+    if (screen) {
+      // Реальный запрос с токеном от автобота → показываем нужный экран
+      response = {
+        version: '3.0',
+        screen,
+        data: { grade_label: gradeLabel }
+      };
+    } else {
+      // Проверка работоспособности или токен без формата → возвращаем первый экран PROGRAMS
+      console.log('ℹ️ Нет goal в токене → PROGRAMS (health check или тест)');
+      response = {
+        version: '3.0',
+        screen: 'PROGRAMS',
+        data: { grade_label: gradeLabel || '—', goal_label: '—' }
+      };
+    }
 
     res.send(encryptResponse(response, aesKey, iv));
 
