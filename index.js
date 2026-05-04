@@ -85,20 +85,30 @@ app.post('/flow', async (req, res) => {
 
     let response;
 
-    if (screen) {
-      // Реальный запрос с токеном от автобота → показываем нужный экран
+    if (action === 'INIT') {
+      // При открытии флоу ВСЕГДА возвращаем PROGRAMS — нельзя сразу отдать RESULT_*
+      // так как у него есть входящий узел в routing_model
+      console.log('🚀 INIT → PROGRAMS');
+      response = {
+        version: '3.0',
+        screen: 'PROGRAMS',
+        data: { grade_label: gradeLabel || '—' }
+      };
+    } else if (screen) {
+      // data_exchange от кнопки на экране PROGRAMS → показываем нужный RESULT экран
+      console.log(`✅ data_exchange → ${screen}`);
       response = {
         version: '3.0',
         screen,
         data: { grade_label: gradeLabel }
       };
     } else {
-      // Проверка работоспособности или токен без формата → возвращаем первый экран PROGRAMS
-      console.log('ℹ️ Нет goal в токене → PROGRAMS (health check или тест)');
+      // Токен без goal (health check) → PROGRAMS
+      console.log('ℹ️ Нет goal в токене → PROGRAMS');
       response = {
         version: '3.0',
         screen: 'PROGRAMS',
-        data: { grade_label: gradeLabel || '—', goal_label: '—' }
+        data: { grade_label: gradeLabel || '—' }
       };
     }
 
