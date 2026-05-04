@@ -5,8 +5,19 @@ app.use(express.json());
 
 const PRIVATE_KEY = (process.env.PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-const GRADE_LABELS = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–9 класс', g10: '10–11 класс' };
-const SCREEN_MAP   = { nil: 'RESULT_NIL', rfmsh: 'RESULT_RFMSH', bil: 'RESULT_BIL', ent: 'RESULT_ENT', combo: 'RESULT_COMBO' };
+const GRADE_LABELS = { g3: '3–4 класс', g5: '5–6 класс', g7: '7–8 класс', g9: '9 класс', g10: '10–11 класс' };
+const SCREEN_MAP   = {
+  nil:      'RESULT_NIL',
+  rfmsh:    'RESULT_RFMSH',
+  bil:      'RESULT_BIL',
+  combo:    'RESULT_COMBO',
+  ent:      'RESULT_ENT',
+  basics:   'RESULT_BASICS',
+  govexam:  'RESULT_GOVEXAM',
+  ent_tech: 'RESULT_ENT_TECH',
+  ent_bio:  'RESULT_ENT_BIO',
+  primary:  'RESULT_PRIMARY'
+};
 
 // ─── Шифрование ───────────────────────────────────────────────────────────────
 function decryptRequest(body) {
