@@ -62,6 +62,12 @@ app.post('/flow', async (req, res) => {
 
     const { action, flow_token, data } = body;
 
+    // Зашифрованный ping — проверка работоспособности от Meta
+    if (action === 'ping') {
+      console.log('🏓 encrypted ping → active');
+      return res.send(encryptResponse({ version: '3.0', data: { status: 'active' } }, aesKey, iv));
+    }
+
     // navigate с ошибкой — Meta сообщает о проблеме, просто отвечаем OK
     if (action === 'navigate' && data?.error) {
       console.warn(`⚠️ navigate error: ${data.error_message}`);
